@@ -1,5 +1,5 @@
 {
-	"name": "talandis/homebridge-comfort",
+	"name": "homebridge-comfort",
 	"version": "0.0.1",
 	"description": "Cytech Comfort Platform plugin for homebridge: https://github.com/nfarina/homebridge",
 	"license": "ISC",
