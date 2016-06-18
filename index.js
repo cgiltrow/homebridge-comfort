@@ -1,222 +1,308 @@
-var http = require('http');
-var Accessory, Service, Characteristic, UUIDGen;
+'use strict';
 
-var platformKey = 'homebridge-comfort';
-var platformName = 'Comfort';
+var Service, Characteristic;
+var net = require("net");
+var sprintf = require("sprintf-js").sprintf;
+
+
+function ComfortPlatform(log, config) {
+    this.log = log;
+    this.host = config["host"];
+    this.port = config["port"];
+    this.login = config["login"];
+    this.ComfortAccessories = config["accessories"];
+    this.client = null;
+    this.clientTimer = null;
+}
 
 module.exports = function (homebridge) {
-    console.log("homebridge API version: " + homebridge.version);
-
-    // Accessory must be created from PlatformAccessory Constructor
-    Accessory = homebridge.platformAccessory;
-
-    // Service and Characteristic are from hap-nodejs
     Service = homebridge.hap.Service;
     Characteristic = homebridge.hap.Characteristic;
-    UUIDGen = homebridge.hap.uuid;
 
-    // For platform plugin to be considered as dynamic platform plugin,
-    // registerPlatform(pluginName, platformName, constructor, dynamic), dynamic must be true
-    homebridge.registerPlatform( platformKey, platformName, ComfortPlatform, true);
+    homebridge.registerPlatform("homebridge-comfort", "Comfort", ComfortPlatform);
 };
 
-// Platform constructor
-// config may be null
-// api may be null if launched from old homebridge version
-function ComfortPlatform(log, config, api) {
-    console.log("ComfortPlatform Init");
-    this.log = log;
-    this.config = config;
-    this.accessories = [];
+ComfortPlatform.prototype = {
+    accessories: function (callback) {
+        this.log("Loading accessories...");
 
-    this.requestServer = http.createServer(function (request, response) {
-        if (request.url === "/add") {
-            this.addAccessory();
-            response.writeHead(204);
-            response.end();
+        var that = this;
+        var foundAccessories = [];
+        if (this.ComfortAccessories == null || this.ComfortAccessories.length == 0) {
+            callback(foundAccessories);
+            return;
+        }
+        this.ComfortAccessories.map(function (s) {
+                that.log("Found: " + s.name);
+                var accessory = null;
+
+                if (s.type == 'blinds') {
+
+                    var services = [];
+
+                    var service = {
+                        controlService: new Service.WindowCovering('Kitchen Blinds'),
+                        characteristics: [Characteristic.CurrentPosition, Characteristic.TargetPosition, Characteristic.PositionState]
+                    };
+
+                    service.controlService.subtype = "KitchenBlindsSubtype";
+
+                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+
+                    services.push(service);
+
+                    accessory = new ComfortAccessory(services);
+
+                } else if (s.type == 'temp_sensor') {
+
+                    var services = [];
+
+                    var service = {
+                        controlService: new Service.TemperatureSensor(s.name),
+                        characteristics: [Characteristic.CurrentTemperature]
+                    };
+
+                    service.controlService.subtype = "BedroomTemperatureSensorSubtype";
+
+                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+
+                    services.push(service);
+
+                    accessory = new ComfortAccessory(services);
+
+                } else if (s.type == 'light') {
+
+                    var services = [];
+
+                    var service = {
+                        controlService: new Service.Lightbulb(s.name),
+                        characteristics: [Characteristic.On]
+                    };
+
+                    service.controlService.subtype = "Light" + s.name;
+                    service.controlService.responseOn = s.responseOn;
+                    service.controlService.responseOff = s.responseOff;
+                    service.controlService.output = s.output;
+
+                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+
+                    services.push(service);
+
+                    accessory = new ComfortAccessory(services);
+
+                } else {
+
+                    if (s.buttons.length != 0) {
+                        var services = [];
+                        for (var b = 0; b < s.buttons.length; b++) {
+                            var service = {
+                                controlService: new Service.Switch(s.buttons[b].caption),
+                                characteristics: [Characteristic.On]
+                            };
+                            if (s.buttons[b].trigger != null)
+                                service.controlService.subtype = s.buttons[b].trigger;
+                            else
+                                service.controlService.subtype = s.buttons[b].triggerOn + s.buttons[b].triggerOff;
+                            service.controlService.trigger = s.buttons[b].trigger;
+                            service.controlService.triggerOn = s.buttons[b].triggerOn;
+                            service.controlService.triggerOff = s.buttons[b].triggerOff;
+                            that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                            services.push(service);
+                        }
+                        accessory = new ComfortAccessory(services);
+                    }
+                }
+
+                if (accessory != null) {
+                    accessory.getServices = function () {
+                        return that.getServices(accessory);
+                    };
+                    accessory.platform = that;
+                    accessory.remoteAccessory = s;
+                    accessory.name = s.name;
+                    accessory.model = "Comfort";
+                    accessory.manufacturer = "Cytech";
+                    accessory.serialNumber = "<unknown>";
+                    foundAccessories.push(accessory);
+
+                }
+            }
+        )
+        callback(foundAccessories);
+    },
+
+    convertResponseNumber: function (resposeNumber) {
+
+        if (resposeNumber > 255) {
+            var responseNumHigh = resposeNumber - 256;
+            var responseNumLow = '01';
+
+            return sprintf("%02X%02X", responseNumHigh, responseNumLow);
+        } else {
+            return sprintf("%02X", resposeNumber);
+        }
+    },
+
+    prepareComfortCommand: function (command, that) {
+
+        that.platform.log("Sending comfort command: " + command);
+
+        return sprintf("%c%s%c", 3, command, 13);
+    },
+
+    command: function (command, that) {
+
+        if (that.platform.client == null) {
+            that.platform.client = new net.Socket();
+            that.platform.client.connect(that.platform.port, that.platform.host, function () {
+
+                that.platform.log('Connected to ' + that.platform.host + ':' + that.platform.port);
+
+                that.platform.client.write(that.platform.prepareComfortCommand("LI" + that.platform.login, that));
+
+            });
+        } else {
+            that.platform.client.write(that.platform.prepareComfortCommand(command, that));
         }
 
-        if (request.url == "/reachability") {
-            this.updateAccessoriesReachability();
-            response.writeHead(204);
-            response.end();
-        }
+        var buf = "";
+        that.platform.client.on('data', function (data) {
 
-        if (request.url == "/remove") {
-            this.removeAccessory();
-            response.writeHead(204);
-            response.end();
-        }
-    }.bind(this));
+            that.platform.log('Incoming data: ' + data);
 
-    this.requestServer.listen(18081, function () {
-        console.log("Server Listening...");
-    });
+            buf += data.toString();
 
-    if (api) {
-        // Save the API object as plugin needs to register new accessory via this object.
-        this.api = api;
+            if (data.toString().search(sprintf("%c", 13)) !== -1) {
 
-        // Listen to event "didFinishLaunching", this means homebridge already finished loading cached accessories
-        // Platform Plugin should only register new accessory that doesn't exist in homebridge after this event.
-        // Or start discover new accessories
-        this.api.on('didFinishLaunching', function () {
-            console.log("Plugin - DidFinishLaunching");
+                that.platform.log("Got message from comfort: " + buf + " / " + buf.substr(0, 2) );
+
+                if (buf.substr(1, 2) == "LU") {
+
+                    that.platform.log("Logged to comfort");
+                    that.platform.client.write(that.platform.prepareComfortCommand(command, that));
+
+                } else if (buf.substr(1, 2) == "IP") {
+
+                    that.platform.log("Zone status changed: " + buf);
+
+                } else {
+
+                    clearTimeout( that.platform.clientTimer );
+                    that.platform.clientTimer = null;
+                    that.platform.clientTimer = setTimeout( function() {
+                        that.platform.client.destroy();
+                        that.platform.client = null;
+                    }.bind( that ), 30000 );
+
+                }
+
+                buf = "";
+            }
+        });
+
+        that.platform.client.on('close', function () {
+            that.platform.log('Connection closed');
+        });
+    },
+    getInformationService: function (homebridgeAccessory) {
+        var informationService = new Service.AccessoryInformation();
+        informationService
+            .setCharacteristic(Characteristic.Name, homebridgeAccessory.name)
+            .setCharacteristic(Characteristic.Manufacturer, homebridgeAccessory.manufacturer)
+            .setCharacteristic(Characteristic.Model, homebridgeAccessory.model)
+            .setCharacteristic(Characteristic.SerialNumber, homebridgeAccessory.serialNumber);
+        return informationService;
+    },
+    bindCharacteristicEvents: function (characteristic, service, accessory) {
+        var onOff = characteristic.props.format == "bool" ? true : false;
+        characteristic
+            .on('set', function (value, callback, context) {
+
+                accessory.platform.log( value, context );
+
+                if (accessory.remoteAccessory.type == 'light') {
+
+                    if (value == 0) {
+                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOff), accessory);
+                    } else {
+                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOn), accessory);
+                    }
+
+                } else if (accessory.remoteAccessory.type == 'blinds') {
+
+                    accessory.platform.log("Set " + service.name + " blinds to " + value);
+                    // jeigu value yra skaicius, tai reikia pasukti zaliuzes. 100 - Atidaryta. 0 - Uzdaryta
+
+                } else {
+
+                    // Cia mygtukai/ijungtuviai beleko, bet ne sviesu
+
+                    // jeigu value == true, tai vadinas reikia ijungti
+                    // jeigu value == false, tai vadinas reikia isjungti
+
+                    accessory.platform.log(value, accessory, service, characteristic);
+
+                    // Cia buvo geras kodas, kuris veikė su paprastais ijungtuviais
+                    // if (context !== 'fromSetValue') {
+                    //     var trigger = null;
+                    //     if (service.controlService.trigger != null)
+                    //         trigger = service.controlService.trigger;
+                    //     else if (value == 0)
+                    //         trigger = service.controlService.triggerOff;
+                    //     else
+                    //         trigger = service.controlService.triggerOn;
+                    //
+                    //     accessory.platform.command(trigger, "", accessory);
+                    //
+                    //     if (service.controlService.trigger != null) {
+                    //         // In order to behave like a push button reset the status to off
+                    //         setTimeout(function () {
+                    //             characteristic.setValue(false, undefined, 'fromSetValue');
+                    //         }, 100);
+                    //     }
+                    // }
+                }
+                callback();
+            }.bind(this));
+        characteristic.on('get', function (callback) {
+
+            if (accessory.remoteAccessory.type == 'light') {
+
+                var status = accessory.platform.command("O?" + accessory.remoteAccessory.output, accessory);
+
+            } else {
+
+                accessory.platform.log(accessory);
+
+                var min = 10,
+                    max = 35;
+
+                var temperature = Math.floor(Math.random() * (max - min + 1)) + min;
+
+            }
+
+            // a push button is normally off
+            callback(undefined, temperature);
         }.bind(this));
+    },
+    getServices: function (homebridgeAccessory) {
+        var services = [];
+        var informationService = homebridgeAccessory.platform.getInformationService(homebridgeAccessory);
+        services.push(informationService);
+        for (var s = 0; s < homebridgeAccessory.services.length; s++) {
+            var service = homebridgeAccessory.services[s];
+            for (var i = 0; i < service.characteristics.length; i++) {
+                var characteristic = service.controlService.getCharacteristic(service.characteristics[i]);
+                if (characteristic == undefined)
+                    characteristic = service.controlService.addCharacteristic(service.characteristics[i]);
+                homebridgeAccessory.platform.bindCharacteristicEvents(characteristic, service, homebridgeAccessory);
+            }
+            services.push(service.controlService);
+        }
+        return services;
     }
 }
 
-// Function invoked when homebridge tries to restore cached accessory
-// Developer can configure accessory at here (like setup event handler)
-// Update current value
-ComfortPlatform.prototype.configureAccessory = function (accessory) {
-    console.log("Plugin - Configure Accessory: " + accessory.displayName);
-
-    // set the accessory to reachable if plugin can currently process the accessory
-    // otherwise set to false and update the reachability later by invoking
-    // accessory.updateReachability()
-    accessory.reachable = true;
-
-    accessory.on('identify', function (paired, callback) {
-        console.log("Identify!!!");
-        callback();
-    });
-
-    if (accessory.getService(Service.Lightbulb)) {
-        accessory.getService(Service.Lightbulb)
-            .getCharacteristic(Characteristic.On)
-            .on('set', function (value, callback) {
-                console.log("Light -> " + value);
-                callback();
-            });
-    }
-
-    this.accessories.push(accessory);
-};
-
-//Handler will be invoked when user try to config your plugin
-//Callback can be cached and invoke when nessary
-ComfortPlatform.prototype.configurationRequestHandler = function (context, request, callback) {
-    console.log("Context: ", JSON.stringify(context));
-    console.log("Request: ", JSON.stringify(request));
-
-    // Check the request response
-    if (request && request.response && request.response.inputs && request.response.inputs.name) {
-        this.addAccessory(request.response.inputs.name);
-
-        // Invoke callback with config will let homebridge save the new config into config.json
-        // Callback = function(response, type, replace, config)
-        // set "type" to platform if the plugin is trying to modify platforms section
-        // set "replace" to true will let homebridge replace existing config in config.json
-        // "config" is the data platform trying to save
-        callback(null, "platform", true, {"platform": "SamplePlatform", "otherConfig": "SomeData"});
-        return;
-    }
-
-    // - UI Type: Input
-    // Can be used to request input from user
-    // User response can be retrieved from request.response.inputs next time
-    // when configurationRequestHandler being invoked
-
-    var respDict = {
-        "type": "Interface",
-        "interface": "input",
-        "title": "Add Accessory",
-        "items": [
-            {
-                "id": "name",
-                "title": "Name",
-                "placeholder": "Fancy Light"
-            }//,
-            // {
-            //   "id": "pw",
-            //   "title": "Password",
-            //   "secure": true
-            // }
-        ]
-    };
-
-    // - UI Type: List
-    // Can be used to ask user to select something from the list
-    // User response can be retrieved from request.response.selections next time
-    // when configurationRequestHandler being invoked
-
-    // var respDict = {
-    //   "type": "Interface",
-    //   "interface": "list",
-    //   "title": "Select Something",
-    //   "allowMultipleSelection": true,
-    //   "items": [
-    //     "A","B","C"
-    //   ]
-    // }
-
-    // - UI Type: Instruction
-    // Can be used to ask user to do something (other than text input)
-    // Hero image is base64 encoded image data. Not really sure the maximum length HomeKit allows.
-
-    // var respDict = {
-    //   "type": "Interface",
-    //   "interface": "instruction",
-    //   "title": "Almost There",
-    //   "detail": "Please press the button on the bridge to finish the setup.",
-    //   "heroImage": "base64 image data",
-    //   "showActivityIndicator": true,
-    // "showNextButton": true,
-    // "buttonText": "Login in browser",
-    // "actionURL": "https://google.com"
-    // }
-
-    // Plugin can set context to allow it track setup process
-    context.ts = "Hello";
-
-    //invoke callback to update setup UI
-    callback(respDict);
-};
-
-// Sample function to show how developer can add accessory dynamically from outside event
-ComfortPlatform.prototype.addAccessory = function (accessoryName) {
-    console.log("Add Accessory");
-    var uuid;
-
-    if (!accessoryName) {
-        accessoryName = "Test Accessory"
-    }
-
-    uuid = UUIDGen.generate(accessoryName);
-
-    var newAccessory = new Accessory(accessoryName, uuid);
-    newAccessory.on('identify', function (paired, callback) {
-        console.log("Identify!!!");
-        callback();
-    });
-    // Plugin can save context on accessory
-    // To help restore accessory in configureAccessory()
-    // newAccessory.context.something = "Something"
-
-    newAccessory.addService(Service.Lightbulb, "Test Light")
-        .getCharacteristic(Characteristic.On)
-        .on('set', function (value, callback) {
-            console.log("Light -> " + value);
-            callback();
-        });
-
-    this.accessories.push(newAccessory);
-    this.api.registerPlatformAccessories(platformKey, platformName, [newAccessory]);
-};
-
-ComfortPlatform.prototype.updateAccessoriesReachability = function () {
-    console.log("Update Reachability");
-    for (var index in this.accessories) {
-        var accessory = this.accessories[index];
-        accessory.updateReachability(false);
-    }
-};
-
-// Sample function to show how developer can remove accessory dynamically from outside event
-ComfortPlatform.prototype.removeAccessory = function () {
-    console.log("Remove Accessory");
-    this.api.unregisterPlatformAccessories(platformKey, platformName, this.accessories);
-
-    this.accessories = [];
-};
+function ComfortAccessory(services) {
+    this.services = services;
+}
