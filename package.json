@@ -1,23 +1,23 @@
 {
-	"name": "homebridge-comfort",
-	"version": "0.0.1",
-	"description": "Cytech Comfort Platform plugin for homebridge: https://github.com/nfarina/homebridge",
-	"license": "ISC",
-	"keywords": [
-		"homebridge-plugin"
-	],
-	"repository": {
-		"type": "git",
-		"url": "git://github.com/talandis/homebridge-comfort.git"
-	},
-	"bugs": {
-		"url": "http://github.com/talandis/homebridge-comfort/issues"
-	},
-	"engines": {
-		"node": ">=0.12.0",
-		"homebridge": ">=0.2.0"
-	},
-	"dependencies": {
-		"sprintf-js": "^1.0.3"
-	}
+  "name": "homebridge-comfort",
+  "version": "0.0.2",
+  "description": "Cytech Comfort Platform plugin for homebridge: https://github.com/nfarina/homebridge",
+  "license": "ISC",
+  "keywords": [
+    "homebridge-plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/talandis/homebridge-comfort.git"
+  },
+  "bugs": {
+    "url": "http://github.com/talandis/homebridge-comfort/issues"
+  },
+  "engines": {
+    "node": ">=0.12.0",
+    "homebridge": ">=0.2.0"
+  },
+  "dependencies": {
+    "sprintf-js": "^1.0.3"
+  }
 }
