@@ -1,6 +1,6 @@
 {
   "name": "homebridge-comfort",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Cytech Comfort Platform plugin for homebridge: https://github.com/nfarina/homebridge",
   "license": "ISC",
   "keywords": [
