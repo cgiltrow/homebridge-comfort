@@ -155,7 +155,7 @@ ComfortPlatform.prototype = {
 
                 } else {
 
-					that.log("Loading strange service: " + s )
+					console.log("Loading strange service: " + s )
 
 /*
                     if (s.buttons.length != 0) {
