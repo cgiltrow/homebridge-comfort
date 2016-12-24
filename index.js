@@ -3,10 +3,10 @@
 var Service, Characteristic;
 var net = require("net");
 var sprintf = require("sprintf-js").sprintf;
+var console = {};
 
-
-function ComfortPlatform(log, config) {
-    this.log = log;
+function ComfortPlatform( log, config) {
+    console.log = log;
     this.host = config["host"];
     this.port = config["port"];
     this.login = config["login"];
@@ -33,7 +33,7 @@ ComfortPlatform.prototype = {
 	},
 	
     accessories: function (callback) {
-        this.log("Loading accessories...");
+        console.log("Loading accessories...");
 
         var that = this;
         var foundAccessories = [];
@@ -42,7 +42,7 @@ ComfortPlatform.prototype = {
             return;
         }
         this.ComfortAccessories.map(function (s) {
-                that.log("Found: " + s.name);
+                console.log("Found: " + s.name);
                 var accessory = null;
 
                 if (s.type == 'blinds') {
@@ -63,7 +63,7 @@ ComfortPlatform.prototype = {
                     service.controlService.outputUp = s.outputUp;
                     service.controlService.outputDown = s.outputDown;
 
-                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                    console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
 
@@ -82,7 +82,7 @@ ComfortPlatform.prototype = {
                     service.controlService.scsNumber = s.scsNumber;
                     service.controlService.convertToCelsius = s.convertToCelsius;
 
-                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                    console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
 
@@ -99,7 +99,7 @@ ComfortPlatform.prototype = {
 
                     service.controlService.subtype = "SecuritySystem" + s.name;
 
-                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                    console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
 
@@ -118,7 +118,7 @@ ComfortPlatform.prototype = {
                     service.controlService.subtype = "TemperatureSensor" + s.name;
                     service.controlService.input = s.input;
 
-                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                    console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
 
@@ -147,7 +147,7 @@ ComfortPlatform.prototype = {
                     service.controlService.responseOff = s.responseOff;
                     service.controlService.output = s.output;
 
-                    that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
+                    console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
 
@@ -219,58 +219,62 @@ ComfortPlatform.prototype = {
 
     prepareComfortCommand: function (command, that) {
 
-        that.platform.log("Sending comfort command: " + command);
+        console.log("Sending comfort command: " + command);
 
         return sprintf("%c%s%c", 3, command, 13);
+    },
+    
+    createComfortClient: function( that ) {
+        that.platform.client = new net.Socket();
+        that.platform.client.connect(that.platform.port, that.platform.host, function () {
+
+//                 that.platform.log('Connected to ' + that.platform.host + ':' + that.platform.port);
+
+            that.platform.client.write(that.platform.prepareComfortCommand("LI" + that.platform.login, that));
+
+        }).on('error', function(err) {
+                    
+            if (err.code == "ECONNREFUSED") {
+                console.log("[ERROR] Connection refused! Please check the IP.");
+                device.clientSocket.destroy();
+                return;
+            } else {
+                if (err.code == "ENOTFOUND") {
+                    console.log("[ERROR] No device found at this address!");
+                    device.clientSocket.destroy();
+                    return;
+                }	                
+                	
+                console.log("[CONNECTION] Unexpected error! " + err.message + "     RESTARTING SERVER");
+                process.exit(1);
+            }
+
+
+		});
     },
 
     command: function (command, that, callback ) {
 
-		var rand = new Date().getTime();
-		
-//         that.platform.log("Command ("+ rand +"): " + command);
-		
-        if (that.platform.client == null) {
-            that.platform.client = new net.Socket();
-            that.platform.client.connect(that.platform.port, that.platform.host, function () {
-
-//                 that.platform.log('Connected to ' + that.platform.host + ':' + that.platform.port);
-
-                that.platform.client.write(that.platform.prepareComfortCommand("LI" + that.platform.login, that));
-
-            }).on('error', function(err) {
-                        
-                if (err.code == "ECONNREFUSED") {
-                    console.log("[ERROR] Connection refused! Please check the IP.");
-                    device.clientSocket.destroy();
-                    return;
-                } else {
-	                if (err.code == "ENOTFOUND") {
-	                    console.log("[ERROR] No device found at this address!");
-	                    device.clientSocket.destroy();
-	                    return;
-	                }	                
-	                	
-	                console.log("[CONNECTION] Unexpected error! " + err.message + "     RESTARTING SERVER");
-	                process.exit(1);
-                }
-
-
-			});
-                        
+        if (that.platform.client == null) {		
+			that.platform.createComfortClient(that)                        
         } else {
             that.platform.client.write(that.platform.prepareComfortCommand(command, that));
         }
-        
+
+		that.platform.addCommandHandler( command, that, callback )
+    },
+    
+    addCommandHandler: function( command, that, callback ) {
+	    
+		var rand = new Date().getTime();		
         var buf = "";
         var completed = false;
         
         var dataReceived = function (data) {
 
 //             that.platform.log('Incoming data: ' + data);
-
             buf += data.toString();
-
+	            
             if (data.toString().search(sprintf("%c", 13)) !== -1) {
 
 //                 that.platform.log("Got message from comfort ("+ rand +"): " + buf + " / " + buf.substr(0, 2) );
@@ -278,7 +282,10 @@ ComfortPlatform.prototype = {
                 if (buf.substr(1, 2) == "LU") {
 
 //                     that.platform.log("Logged to comfort");
-                    that.platform.client.write(that.platform.prepareComfortCommand(command, that));
+
+					if ( command != "" ) {
+                    	that.platform.client.write(that.platform.prepareComfortCommand(command, that));
+                    }
 
 //                 } else if (buf.substr(1, 2) == "IP") {
 //                     that.platform.log("Zone status changed: " + buf);
@@ -286,8 +293,11 @@ ComfortPlatform.prototype = {
                 } else {
 
 					if ( typeof callback == 'function' && !completed ) {
-						completed = callback( buf )
 						
+// 						that.platform.log(buf.substr( 1, 2) +"--"+ buf.substr( 3, 2)+"--"+ buf.substr( 5 ))
+						
+						completed = callback( buf.substr( 1, 2), buf.substr( 3, 2), buf.substr( 5 ) )
+												
 						if ( completed ) {
 							that.platform.client.removeListener('data', dataReceived )
 						}
@@ -306,8 +316,11 @@ ComfortPlatform.prototype = {
             }
         };
         
+                
         that.platform.client.on('data', dataReceived );
+	    
     },
+    
     getInformationService: function (homebridgeAccessory) {
         var informationService = new Service.AccessoryInformation();
         informationService
@@ -318,10 +331,8 @@ ComfortPlatform.prototype = {
         return informationService;
     },
     bindCharacteristicEvents: function (characteristic, service, accessory) {
-	    
-        var onOff = characteristic.props.format == "bool" ? true : false;
-        characteristic
-            .on('set', function (value, callback, context) {
+	     
+        characteristic.on('set', function (value, callback, context) {
 
 //                 accessory.platform.log( value, context );
 
@@ -341,7 +352,7 @@ ComfortPlatform.prototype = {
 
                 } else if (accessory.remoteAccessory.type == 'blinds') {
 
-                    accessory.platform.log("Start blinds logic");
+                    console.log("Start blinds logic");
 /*
                     // Turn off both directions
                     accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseDownOff ), accessory );
@@ -382,12 +393,12 @@ ComfortPlatform.prototype = {
                     }
 */
 
-                    accessory.platform.log("Set blinds to " + value, service );
+                    console.log("Set blinds to " + value, service );
                     callback();
 
 				} else if ( accessory.remoteAccessory.type == "security") {
 					
-					accessory.platform.log("Set security to " + value, service );
+					console.log("Set security to " + value, service );
 					
 					var statusMap = {};
 						statusMap[ Characteristic.SecuritySystemTargetState.STAY_ARM ] = accessory.platform.securityStates.DAY;
@@ -397,12 +408,12 @@ ComfortPlatform.prototype = {
 					
 					if ( statusMap[ value ] ) {
 						
-						accessory.platform.command("M!" + statusMap[ value ] + accessory.platform.login, accessory, function( response ) {
+						accessory.platform.command("M!" + statusMap[ value ] + accessory.platform.login, accessory, function( command, status ) {
 							
-							accessory.platform.log( response )							
+							console.log( command, status )							
 														
-							if ( response.substr( 1, 2 ) == "MD") {							
-				                callback();	
+							if ( command == "MD") {							
+				                callback( undefined, value );	
 				                return true;
 							}
 							
@@ -423,25 +434,20 @@ ComfortPlatform.prototype = {
 
                 } else {
 
-                    accessory.platform.log("SET VALUE OF SOMETHING ", value, accessory.remoteAccessory );
+                    console.log("SET VALUE OF SOMETHING ", value, accessory.remoteAccessory );
 					callback();
                 }
 
             }.bind(this));
-            
-        characteristic.on('notify', function( callback) {
-	        
-            accessory.platform.log("NOTIFY ", value, accessory.remoteAccessory );	        
-	        
-        })
-            
+                        
         characteristic.on('get', function (callback) {
 
             if (accessory.remoteAccessory.type == 'light' || accessory.remoteAccessory.type == "switch" || accessory.remoteAccessory.type == "fan") {
 
-                var status = accessory.platform.command("O?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.output ), accessory, function( response ) {	                
-	                if ( response.substr(1, 2) == "O?") {		                
-		                var status = accessory.platform.hexToDec(  response.substr( 5, 2 ) );		               
+                var status = accessory.platform.command("O?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.output ), accessory, function( command, output, status ) {	                
+	                
+	                if ( command == "O?" && accessory.platform.hexToDec( output ) == accessory.remoteAccessory.output ) {		                
+		                var status = accessory.platform.hexToDec(  status.substr( 0, 2 ) );		               		                
 						callback(undefined, status == 1 );		                		                					
 						return true;
 	                }	            
@@ -452,14 +458,15 @@ ComfortPlatform.prototype = {
 
             } else if ( accessory.remoteAccessory.type == "temp_sensor" ) {
 
-                var result = accessory.platform.command("s?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.scsNumber ), accessory, function( response ) {	                
-	                if ( response.substr(1, 2) == "s?") {		        
+                var result = accessory.platform.command("s?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.scsNumber ), accessory, function( command, sensor, temperature ) {	                
+	                
+	                if ( command == "s?" && accessory.platform.hexToDec( sensor ) == accessory.remoteAccessory.scsNumber ) {		        
 		                
-		                var temperature = accessory.platform.hexToDec( response.substr( 5, 2 ) );
+		                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
 		                
 		                if ( accessory.remoteAccessory.convertToCelsius ) {
 			                temperature = accessory.platform.toCelsius( temperature )
-		                }        
+		                } 
 		                   
 		                callback( undefined, temperature );	                
 		                return true;
@@ -470,9 +477,9 @@ ComfortPlatform.prototype = {
                 
             } else if ( accessory.remoteAccessory.type == "motion_sensor") {
 
-	            var result = accessory.platform.command("I?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.input ), accessory, function( response ) {	                
-	                if ( response.substr(1, 2) == "I?") {		                
-		                var motionDetected = accessory.platform.hexToDec( response.substr( 5, 2 ) )		                
+	            var result = accessory.platform.command("I?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.input ), accessory, function( command, input, status ) {	                
+	                if ( command == "I?" && accessory.platform.hexToDec( input ) == accessory.remoteAccessory.input ) {		                
+		                var motionDetected = accessory.platform.hexToDec( status.substr( 0, 2 ) )		                
 		                callback( undefined, motionDetected == 1 );	                
 		                return true;
 	                }	                
@@ -482,11 +489,9 @@ ComfortPlatform.prototype = {
 
 			} else if ( accessory.remoteAccessory.type == "security") {
 
-				accessory.platform.command("M?", accessory, function( response ) {
+				accessory.platform.command("M?", accessory, function( command, status, user ) {
 
-					if ( response.substr(1, 2) == "M?") {
-					
-						var status = response.substr( 3, 2 )
+					if ( command == "M?") {
 					
 						var statusMap = {};
 							statusMap[ accessory.platform.securityStates.OFF ] = Characteristic.SecuritySystemCurrentState.DISARMED;
@@ -494,7 +499,7 @@ ComfortPlatform.prototype = {
 							statusMap[ accessory.platform.securityStates.NIGHT ] = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
 							statusMap[ accessory.platform.securityStates.DAY ] = Characteristic.SecuritySystemCurrentState.STAY_ARM;
 							statusMap[ accessory.platform.securityStates.VACATION ] = "";
-						
+												
 						if ( statusMap[ status ] ) {
 							callback( undefined, statusMap[ status ] )
 							return true;
@@ -506,13 +511,50 @@ ComfortPlatform.prototype = {
 				
             } else {	            
 	            
-	            accessory.platform.log( "READING SOMETHING", accessory.remoteAccessory.type );
+	            console.log( "READING SOMETHING", accessory.remoteAccessory.type );
 	            
                 callback( undefined, false );
             }
 
         }.bind(this));
     },
+    
+    addMotionEvent: function( characteristic, service, accessory ) {
+	    
+	    if ( accessory.platform.client == null ) {
+		  	accessory.platform.createComfortClient( accessory );
+	  	}
+	  	
+	  	accessory.platform.addCommandHandler( "", accessory, function( command, input, status ) {		
+		 	if ( command == "IP" && accessory.remoteAccessory.input == accessory.platform.hexToDec( input ) ) {
+			 	characteristic.setValue( accessory.platform.hexToDec( status ) > 0 )
+		 	}		  			  	
+	  	} )
+	  		  	  
+    },
+    
+    addTemperatureEvent: function( characteristic, service, accessory ) {
+	  
+	    if ( accessory.platform.client == null ) {
+		  	accessory.platform.createComfortClient( accessory );
+	  	}
+	  	
+	  	accessory.platform.addCommandHandler( "", accessory, function( command, scsNumber, temperature ) {		
+		  	
+		 	if ( command == "sr" && accessory.remoteAccessory.scsNumber == accessory.platform.hexToDec( scsNumber ) ) {
+			 				 	
+                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
+                
+                if ( accessory.remoteAccessory.convertToCelsius ) {
+	                temperature = accessory.platform.toCelsius( temperature )
+                } 
+                
+                characteristic.setValue( temperature )			 	
+		 	}		  			  	
+	  	} )
+	    
+    },
+    
     getServices: function (homebridgeAccessory) {
         var services = [];
         var informationService = homebridgeAccessory.platform.getInformationService(homebridgeAccessory);
@@ -521,9 +563,21 @@ ComfortPlatform.prototype = {
             var service = homebridgeAccessory.services[s];
             for (var i = 0; i < service.characteristics.length; i++) {
                 var characteristic = service.controlService.getCharacteristic(service.characteristics[i]);
+
                 if (characteristic == undefined)
                     characteristic = service.controlService.addCharacteristic(service.characteristics[i]);
-                homebridgeAccessory.platform.bindCharacteristicEvents(characteristic, service, homebridgeAccessory);
+                    
+                if ( service.characteristics[i] == Characteristic.CurrentTemperature ) {
+		            homebridgeAccessory.platform.addTemperatureEvent( characteristic, service, homebridgeAccessory )
+                }
+                    
+                if ( service.characteristics[i] == Characteristic.MotionDetected ) {	                
+	                homebridgeAccessory.platform.addMotionEvent( characteristic, service, homebridgeAccessory )	                          
+	            } else {
+	                homebridgeAccessory.platform.bindCharacteristicEvents(characteristic, service, homebridgeAccessory);	                
+                }
+                    
+
             }
             services.push(service.controlService);
         }
