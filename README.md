@@ -32,12 +32,53 @@ Configuration sample:
       "port": "1001",
       "accessories": [
         {
-          "name": "Office Light",
-          "type": "light",
-          "output": 8,
-          "responseOn": 15,
-          "responseOff": 16
-        }
+          	"name": "Office Light",
+          	"type": "light",
+          	"output": 8,
+          	"responseOn": 15,
+          	"responseOff": 16
+        },
+        {
+			"name": "Bedroom",
+			"type": "temp_sensor",
+			"convertToCelsius": true,
+			"scsNumber": 8
+		},
+		{
+			"name" : "Office Blinds",
+			"type": "blinds",
+			"outputUp": 12,
+			"outputDown": 44,
+			"timeToOpen" : 24,
+			"responseUpOn": 430,
+			"responseUpOff": 427,
+			"responseDownOn": 428,
+			"responseDownOff": 425
+		},		
+		{
+			"name": "Home Security System",
+			"type": "security"
+		},	
+		{
+			"name" : "TV",
+			"type": "switch",
+			"output": 8,
+			"responseOn": 15,
+			"responseOff": 16
+		},
+		{
+			"name": "Fan",
+			"type": "fan",
+			"output": 8,
+			"responseOn": 15,
+			"responseOff": 16					
+		},
+		{
+			"name": "Office PIR",
+			"type": "motion_sensor",
+			"input": 18
+		}
+
       ]
     }
   ]
@@ -45,8 +86,9 @@ Configuration sample:
 
 #ToDo
 
-- Add switches support
-- Add rollerblinds support
-- Add temperature sensor support
-- Read Output statuses
+- add support for partial rollerblind opening
+- add Outlets
+- finish motion sensor support
+- add Smoke sensor support
+- add garage door opener support 
 - Create events for Inputs
