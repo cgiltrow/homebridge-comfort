@@ -33,7 +33,7 @@ ComfortPlatform.prototype = {
 	},
 	
     accessories: function (callback) {
-        console.log("Loading accessories...");
+//         console.log("Loading accessories...");
 
         var that = this;
         var foundAccessories = [];
@@ -155,29 +155,8 @@ ComfortPlatform.prototype = {
 
                 } else {
 
-					console.log("Loading strange service: " + s )
+					console.log("Skipping strange service: " + s.name )
 
-/*
-                    if (s.buttons.length != 0) {
-                        var services = [];
-                        for (var b = 0; b < s.buttons.length; b++) {
-                            var service = {
-                                controlService: new Service.Switch(s.buttons[b].caption),
-                                characteristics: [Characteristic.On]
-                            };
-                            if (s.buttons[b].trigger != null)
-                                service.controlService.subtype = s.buttons[b].trigger;
-                            else
-                                service.controlService.subtype = s.buttons[b].triggerOn + s.buttons[b].triggerOff;
-                            service.controlService.trigger = s.buttons[b].trigger;
-                            service.controlService.triggerOn = s.buttons[b].triggerOn;
-                            service.controlService.triggerOff = s.buttons[b].triggerOff;
-                            that.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
-                            services.push(service);
-                        }
-                        accessory = new ComfortAccessory(services);
-                    }
-*/
                 }
 
                 if (accessory != null) {
@@ -218,9 +197,6 @@ ComfortPlatform.prototype = {
     },
 
     prepareComfortCommand: function (command, that) {
-
-        console.log("Sending comfort command: " + command);
-
         return sprintf("%c%s%c", 3, command, 13);
     },
     
@@ -236,12 +212,14 @@ ComfortPlatform.prototype = {
                     
             if (err.code == "ECONNREFUSED") {
                 console.log("[ERROR] Connection refused! Please check the IP.");
-                device.clientSocket.destroy();
+                that.platform.client.destroy();
+                that.platform.client = null;
                 return;
             } else {
                 if (err.code == "ENOTFOUND") {
                     console.log("[ERROR] No device found at this address!");
-                    device.clientSocket.destroy();
+					that.platform.client.destroy();
+	                that.platform.client = null;
                     return;
                 }	                
                 	
@@ -308,7 +286,7 @@ ComfortPlatform.prototype = {
                     that.platform.clientTimer = setTimeout( function() {
                         that.platform.client.destroy();
                         that.platform.client = null;
-                    }.bind( that ), 30000 );
+                    }.bind( that ), 5000 );
 
                 }
 
@@ -330,231 +308,252 @@ ComfortPlatform.prototype = {
             .setCharacteristic(Characteristic.SerialNumber, homebridgeAccessory.serialNumber);
         return informationService;
     },
-    bindCharacteristicEvents: function (characteristic, service, accessory) {
+    
+    setLightsState: function( value, accessory, service, callback, context ) {
+
+        if (value == 0) {
+            accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOff), accessory, function() {
+                callback();
+                return true;
+            });
+        } else {
+            accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOn), accessory, function() {
+                callback();
+                return true;
+            });
+        }
+    },
+
+	setBlindsState: function( value, accessory, service, callback, context ) {
+		
+		console.log("Start blinds logic");
+
+        // Turn off both directions
+        accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseDownOff ), accessory );
+        accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseUpOff ), accessory );
+
+        var onResponse, offResponse;
+
+        if ( value == 0 ) {
+            onResponse = service.controlService.responseDownOn;
+            offResponse = service.controlService.responseDownOff;
+        } else {
+            // We use these responses to completely open the blinds (even if we wan't them half opened)
+            onResponse = service.controlService.responseUpOn;
+            offResponse = service.controlService.responseUpOff;
+        }
+
+        // Turn on Up/Down response for timeToOpen
+        accessory.platform.command("R!" + accessory.platform.convertResponseNumber( onResponse ), accessory );
+
+        setTimeout( function( accessory, offResponse ) {
+            accessory.platform.command("R!" + accessory.platform.convertResponseNumber( offResponse ), accessory );
+        }.bind(undefined, accessory, offResponse ), service.controlService.timeToOpen * 1000 );
+
+        console.log( "Turn off after " + service.controlService.timeToOpen * 1000 + " milliseconds");
+
+        // If we need partial opening close the blinds partially
+
+        if ( value != 0 && value != 100 ) {
+
+            var timeToClose = (service.controlService.timeToOpen * value / 100) * 1000;
+
+            accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseDownOn ), accessory );
+
+            setTimeout( function( accessory, offResponse ) {
+                accessory.platform.command("R!" + accessory.platform.convertResponseNumber( offResponse ), accessory );
+            }.bind(undefined, accessory, service.controlService.responseDownOff ), timeToClose );
+
+        }
+
+        console.log("Set blinds to " + value, service );
+        callback();
+		
+	},
+		
+    setSecurityState: function( value, accessory, service, callback, context ) 
+    {
+	    var statusMap = {};
+			statusMap[ Characteristic.SecuritySystemTargetState.STAY_ARM ] = accessory.platform.securityStates.DAY;
+			statusMap[ Characteristic.SecuritySystemTargetState.AWAY_ARM ] = accessory.platform.securityStates.AWAY;
+			statusMap[ Characteristic.SecuritySystemTargetState.NIGHT_ARM ] = accessory.platform.securityStates.NIGHT;
+			statusMap[ Characteristic.SecuritySystemTargetState.DISARM ] = accessory.platform.securityStates.OFF;
+		
+		if ( statusMap[ value ] ) {
+			
+			accessory.platform.command("M!" + statusMap[ value ] + accessory.platform.login, accessory, function( command, status ) {
+											
+				if ( command == "MD") {			
+				
+					  // Important: after a successful server response, we update the current state of the system
+					service.controlService.setCharacteristic(Characteristic.SecuritySystemCurrentState, value );
+										
+					callback( null, value );
+	                return true;
+				}
+				
+				return false;
+				
+				
+			} )
+			
+		}
+
+    },
+    
+    getLightsState: function( accessory, service, callback ) {
+	    
+        var status = accessory.platform.command("O?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.output ), accessory, function( command, output, status ) {	                
+            
+            if ( command == "O?" && accessory.platform.hexToDec( output ) == accessory.remoteAccessory.output ) {		                
+                var status = accessory.platform.hexToDec(  status.substr( 0, 2 ) );		               		                
+				callback(undefined, status == 1 );		                		                					
+				return true;
+            }	            
+            
+            return false;    
+        });
+    },
+    
+    getTemperatureState: function( accessory, service, callback ) {
+	    
+
+        var result = accessory.platform.command("s?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.scsNumber ), accessory, function( command, sensor, temperature ) {	                
+            
+            if ( command == "s?" && accessory.platform.hexToDec( sensor ) == accessory.remoteAccessory.scsNumber ) {		        
+                
+                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
+                
+                if ( accessory.remoteAccessory.convertToCelsius ) {
+	                temperature = accessory.platform.toCelsius( temperature )
+                } 
+                   
+                callback( undefined, temperature );	                
+                return true;
+            }	                
+            
+            return false;
+        } );
+	    
+    },
+    
+    getMotionState: function( accessory, service, callback ) {
+        var result = accessory.platform.command("I?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.input ), accessory, function( command, input, status ) {	                
+	        if ( command == "I?" && accessory.platform.hexToDec( input ) == accessory.remoteAccessory.input ) {		                
+	            var motionDetected = accessory.platform.hexToDec( status.substr( 0, 2 ) )		                
+	            callback( undefined, motionDetected == 1 );	                
+	            return true;
+	        }	                
+	        
+	        return false;
+	    } );
+    },
+    
+    getSecurityState: function( accessory, service, callback ) {
+	    
+		accessory.platform.command("M?", accessory, function( command, status, user ) {
+
+			if ( command == "M?") {
+			
+				var statusMap = {};
+					statusMap[ accessory.platform.securityStates.OFF ] = Characteristic.SecuritySystemCurrentState.DISARMED;
+					statusMap[ accessory.platform.securityStates.AWAY ] = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+					statusMap[ accessory.platform.securityStates.NIGHT ] = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
+					statusMap[ accessory.platform.securityStates.DAY ] = Characteristic.SecuritySystemCurrentState.STAY_ARM;
+					statusMap[ accessory.platform.securityStates.VACATION ] = "";
+										
+				if ( statusMap[ status ] ) {
+					callback( null, statusMap[ status ] )
+					return true;
+				}
+				
+				return false;	
+			}
+		})	    
+    },
+    
+    bindCharacteristicEvents: function (characteristic, service, accessory, characteristicType ) {
 	     
         characteristic.on('set', function (value, callback, context) {
 
-//                 accessory.platform.log( value, context );
+            if (accessory.remoteAccessory.type == 'light' || accessory.remoteAccessory.type == "switch" || accessory.remoteAccessory.type == "fan" ) {
+				return accessory.platform.setLightsState( value, accessory, service, callback, context )
+            } else if (accessory.remoteAccessory.type == 'blinds') {
+                return accessory.platform.setBlindsState(  value, accessory, service, callback, context )
+			} else if ( accessory.remoteAccessory.type == "security" ) {				
+				
+				if ( characteristicType == Characteristic.SecuritySystemCurrentState ) {
+					callback( null, value )
+					return true;	
+				}
+				
+				return accessory.platform.setSecurityState( value, accessory, service, callback, context )					
+			
+            } else {
+                console.log("SET VALUE OF SOMETHING ", value, accessory.remoteAccessory );
+				callback();
+            }
 
-                if (accessory.remoteAccessory.type == 'light' || accessory.remoteAccessory.type == "switch" || accessory.remoteAccessory.type == "fan" ) {
-
-                    if (value == 0) {
-                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOff), accessory, function() {
-                            callback();
-                            return true;
-                        });
-                    } else {
-                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber(service.controlService.responseOn), accessory, function() {
-                            callback();
-                            return true;
-                        });
-                    }
-
-                } else if (accessory.remoteAccessory.type == 'blinds') {
-
-                    console.log("Start blinds logic");
-/*
-                    // Turn off both directions
-                    accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseDownOff ), accessory );
-                    accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseUpOff ), accessory );
-
-                    var onResponse, offResponse;
-
-                    if ( value == 0 ) {
-                        onResponse = service.controlService.responseDownOn;
-                        offResponse = service.controlService.responseDownOff;
-                    } else {
-                        // We use these responses to completely open the blinds (even if we wan't them half opened)
-                        onResponse = service.controlService.responseUpOn;
-                        offResponse = service.controlService.responseUpOff;
-                    }
-
-                    // Turn on Up/Down response for timeToOpen
-                    accessory.platform.command("R!" + accessory.platform.convertResponseNumber( onResponse ), accessory );
-
-                    setTimeout( function( accessory, offResponse ) {
-                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber( offResponse ), accessory );
-                    }.bind(undefined, accessory, offResponse ), service.controlService.timeToOpen * 1000 );
-
-                    accessory.platform.log( "Turn off after " + service.controlService.timeToOpen * 1000 + " milliseconds");
-
-                    // If we need partial opening close the blinds partially
-
-                    if ( value != 0 && value != 100 ) {
-
-                        var timeToClose = (service.controlService.timeToOpen * value / 100) * 1000;
-
-                        accessory.platform.command("R!" + accessory.platform.convertResponseNumber( service.controlService.responseDownOn ), accessory );
-
-                        setTimeout( function( accessory, offResponse ) {
-                            accessory.platform.command("R!" + accessory.platform.convertResponseNumber( offResponse ), accessory );
-                        }.bind(undefined, accessory, service.controlService.responseDownOff ), timeToClose );
-
-                    }
-*/
-
-                    console.log("Set blinds to " + value, service );
-                    callback();
-
-				} else if ( accessory.remoteAccessory.type == "security") {
-					
-					console.log("Set security to " + value, service );
-					
-					var statusMap = {};
-						statusMap[ Characteristic.SecuritySystemTargetState.STAY_ARM ] = accessory.platform.securityStates.DAY;
-						statusMap[ Characteristic.SecuritySystemTargetState.AWAY_ARM ] = accessory.platform.securityStates.AWAY;
-						statusMap[ Characteristic.SecuritySystemTargetState.NIGHT_ARM ] = accessory.platform.securityStates.NIGHT;
-						statusMap[ Characteristic.SecuritySystemTargetState.DISARM ] = accessory.platform.securityStates.OFF;
-					
-					if ( statusMap[ value ] ) {
-						
-						accessory.platform.command("M!" + statusMap[ value ] + accessory.platform.login, accessory, function( command, status ) {
-							
-							console.log( command, status )							
-														
-							if ( command == "MD") {							
-				                callback( undefined, value );	
-				                return true;
-							}
-							
-							return false;
-							
-							
-						} )
-						
-					}
-					
-/*
-					// The value property of SecuritySystemTargetState must be one of the following:
-					Characteristic.SecuritySystemTargetState.STAY_ARM = 0;
-					Characteristic.SecuritySystemTargetState.AWAY_ARM = 1;
-					Characteristic.SecuritySystemTargetState.NIGHT_ARM = 2;
-					Characteristic.SecuritySystemTargetState.DISARM = 3;
-*/
-
-                } else {
-
-                    console.log("SET VALUE OF SOMETHING ", value, accessory.remoteAccessory );
-					callback();
-                }
-
-            }.bind(this));
+        }.bind(this));
                         
         characteristic.on('get', function (callback) {
 
             if (accessory.remoteAccessory.type == 'light' || accessory.remoteAccessory.type == "switch" || accessory.remoteAccessory.type == "fan") {
-
-                var status = accessory.platform.command("O?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.output ), accessory, function( command, output, status ) {	                
-	                
-	                if ( command == "O?" && accessory.platform.hexToDec( output ) == accessory.remoteAccessory.output ) {		                
-		                var status = accessory.platform.hexToDec(  status.substr( 0, 2 ) );		               		                
-						callback(undefined, status == 1 );		                		                					
-						return true;
-	                }	            
-	                
-	                return false;    
-                });
-                
-
+				return accessory.platform.getLightsState( accessory, service, callback )
             } else if ( accessory.remoteAccessory.type == "temp_sensor" ) {
-
-                var result = accessory.platform.command("s?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.scsNumber ), accessory, function( command, sensor, temperature ) {	                
-	                
-	                if ( command == "s?" && accessory.platform.hexToDec( sensor ) == accessory.remoteAccessory.scsNumber ) {		        
-		                
-		                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
-		                
-		                if ( accessory.remoteAccessory.convertToCelsius ) {
-			                temperature = accessory.platform.toCelsius( temperature )
-		                } 
-		                   
-		                callback( undefined, temperature );	                
-		                return true;
-	                }	                
-	                
-	                return false;
-                } );
-                
+				return accessory.platform.getTemperatureState( accessory, service, callback )                
             } else if ( accessory.remoteAccessory.type == "motion_sensor") {
-
-	            var result = accessory.platform.command("I?" + accessory.platform.convertResponseNumber( accessory.remoteAccessory.input ), accessory, function( command, input, status ) {	                
-	                if ( command == "I?" && accessory.platform.hexToDec( input ) == accessory.remoteAccessory.input ) {		                
-		                var motionDetected = accessory.platform.hexToDec( status.substr( 0, 2 ) )		                
-		                callback( undefined, motionDetected == 1 );	                
-		                return true;
-	                }	                
-	                
-	                return false;
-                } );
-
+				return accessory.platform.getMotionState( accessKey, service, callback )
 			} else if ( accessory.remoteAccessory.type == "security") {
-
-				accessory.platform.command("M?", accessory, function( command, status, user ) {
-
-					if ( command == "M?") {
-					
-						var statusMap = {};
-							statusMap[ accessory.platform.securityStates.OFF ] = Characteristic.SecuritySystemCurrentState.DISARMED;
-							statusMap[ accessory.platform.securityStates.AWAY ] = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-							statusMap[ accessory.platform.securityStates.NIGHT ] = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
-							statusMap[ accessory.platform.securityStates.DAY ] = Characteristic.SecuritySystemCurrentState.STAY_ARM;
-							statusMap[ accessory.platform.securityStates.VACATION ] = "";
-												
-						if ( statusMap[ status ] ) {
-							callback( undefined, statusMap[ status ] )
-							return true;
-						}
-						
-						return false;	
-					}
-				})
-				
-            } else {	            
-	            
-	            console.log( "READING SOMETHING", accessory.remoteAccessory.type );
-	            
+				return accessory.platform.getSecurityState( accessory, service, callback )				
+            } else {	            	            
+	            console.log( "READING SOMETHING", accessory.remoteAccessory.type );	            
                 callback( undefined, false );
             }
 
         }.bind(this));
     },
     
-    addMotionEvent: function( characteristic, service, accessory ) {
-	    
-	    if ( accessory.platform.client == null ) {
-		  	accessory.platform.createComfortClient( accessory );
-	  	}
-	  	
-	  	accessory.platform.addCommandHandler( "", accessory, function( command, input, status ) {		
-		 	if ( command == "IP" && accessory.remoteAccessory.input == accessory.platform.hexToDec( input ) ) {
-			 	characteristic.setValue( accessory.platform.hexToDec( status ) > 0 )
-		 	}		  			  	
-	  	} )
-	  		  	  
-    },
-    
-    addTemperatureEvent: function( characteristic, service, accessory ) {
-	  
-	    if ( accessory.platform.client == null ) {
-		  	accessory.platform.createComfortClient( accessory );
-	  	}
-	  	
-	  	accessory.platform.addCommandHandler( "", accessory, function( command, scsNumber, temperature ) {		
+    events: {
+
+	    motion: function( characteristic, service, accessory ) {
+		    
+		    if ( accessory.platform.client == null ) {
+			  	accessory.platform.createComfortClient( accessory );
+		  	}
 		  	
-		 	if ( command == "sr" && accessory.remoteAccessory.scsNumber == accessory.platform.hexToDec( scsNumber ) ) {
-			 				 	
-                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
-                
-                if ( accessory.remoteAccessory.convertToCelsius ) {
-	                temperature = accessory.platform.toCelsius( temperature )
-                } 
-                
-                characteristic.setValue( temperature )			 	
-		 	}		  			  	
-	  	} )
+		  	accessory.platform.addCommandHandler( "", accessory, function( command, input, status ) {		
+			 	if ( command == "IP" && accessory.remoteAccessory.input == accessory.platform.hexToDec( input ) ) {
+				 	characteristic.setValue( accessory.platform.hexToDec( status ) > 0 )
+			 	}		  			  	
+		  	} )
+		  		  	  
+	    },
+	    
+	    temperature: function( characteristic, service, accessory ) {
+		  
+		    if ( accessory.platform.client == null ) {
+			  	accessory.platform.createComfortClient( accessory );
+		  	}
+		  	
+		  	accessory.platform.addCommandHandler( "", accessory, function( command, scsNumber, temperature ) {		
+			  	
+			 	if ( command == "sr" && accessory.remoteAccessory.scsNumber == accessory.platform.hexToDec( scsNumber ) ) {
+				 				 	
+	                var temperature = accessory.platform.hexToDec( temperature.substr( 0, 2 ) );
+	                
+	                if ( accessory.remoteAccessory.convertToCelsius ) {
+		                temperature = accessory.platform.toCelsius( temperature )
+	                } 
+	                
+	                characteristic.setValue( temperature )			 	
+			 	}		  			  	
+		  	} )
+		    
+	    },
 	    
     },
-    
+        
     getServices: function (homebridgeAccessory) {
         var services = [];
         var informationService = homebridgeAccessory.platform.getInformationService(homebridgeAccessory);
@@ -568,13 +567,13 @@ ComfortPlatform.prototype = {
                     characteristic = service.controlService.addCharacteristic(service.characteristics[i]);
                     
                 if ( service.characteristics[i] == Characteristic.CurrentTemperature ) {
-		            homebridgeAccessory.platform.addTemperatureEvent( characteristic, service, homebridgeAccessory )
+		            homebridgeAccessory.platform.events.temperature( characteristic, service, homebridgeAccessory )
                 }
                     
                 if ( service.characteristics[i] == Characteristic.MotionDetected ) {	                
-	                homebridgeAccessory.platform.addMotionEvent( characteristic, service, homebridgeAccessory )	                          
+	                homebridgeAccessory.platform.events.motion( characteristic, service, homebridgeAccessory )	                          
 	            } else {
-	                homebridgeAccessory.platform.bindCharacteristicEvents(characteristic, service, homebridgeAccessory);	                
+	                homebridgeAccessory.platform.bindCharacteristicEvents(characteristic, service, homebridgeAccessory, service.characteristics[i]);	                
                 }
                     
 
