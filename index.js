@@ -82,6 +82,8 @@ ComfortPlatform.prototype = {
                     service.controlService.scsNumber = s.scsNumber;
                     service.controlService.convertToCelsius = s.convertToCelsius;
 
+					service.controlService.getCharacteristic( Characteristic.CurrentTemperature ).setProps( { minValue: -100 });
+
                     console.log("Loading service: " + service.controlService.displayName + ", subtype: " + service.controlService.subtype);
 
                     services.push(service);
